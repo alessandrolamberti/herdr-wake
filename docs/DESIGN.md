@@ -33,7 +33,7 @@ Two seams are real because they have several adapters each: `Agent` (four) and `
 3. **The wrapper stays the parent of the agent, then replaces itself with the real shell.** If the agent became the terminal's own program, quitting it would end the terminal for good.
 4. **Add the login flag core drops.** On macOS, setting `shell` removes the `-l` core adds by default; the real shell is started as a login shell there.
 5. **Store facts, rebuild the command.** A record holds id, folder, flags and env. The resume command is built at wake time from the agent's current rules and flags are re-checked against its `--help`. A cached command line is how legacy Herdr resumes the wrong session after `/clear`.
-6. **No secrets in records.** Env is an allowlist (`PATH`, `CLAUDE_CONFIG_DIR`, `CODEX_HOME`, `PI_CODING_AGENT_DIR`, `OPENCODE_CONFIG_DIR` and similar). Anything matching `*_KEY`, `*_TOKEN`, `*_PASSWORD` is never stored.
+6. **No secrets in records.** Env is an allowlist (`PATH`, `CLAUDE_CONFIG_DIR`, `CODEX_HOME`, `PI_CODING_AGENT_DIR`, `OPENCODE_CONFIG_DIR` and similar, plus the CA certificate locations TLS clients read, such as `SSL_CERT_FILE` and `NODE_EXTRA_CA_CERTS`). Anything matching `*_KEY`, `*_TOKEN`, `*_PASSWORD` is never stored.
 7. **Never check on core with `hc`.** Connect to the socket directly, or look for the process.
 8. **Edits to other tools' files are surgical.** Add or remove only herdr-wake's own entries, keep comments and order, back up first. Codex hook trust is hash-bound, so the hook command string never changes between versions.
 

@@ -448,6 +448,12 @@ fn scrub_env_keeps_only_the_allowlist() {
         ("XDG_CONFIG_HOME", "/xc"),
         ("XDG_DATA_HOME", "/xd"),
         ("XDG_STATE_HOME", "/xs"),
+        ("SSL_CERT_FILE", "/etc/ca.pem"),
+        ("SSL_CERT_DIR", "/etc/certs"),
+        ("REQUESTS_CA_BUNDLE", "/etc/ca.pem"),
+        ("CURL_CA_BUNDLE", "/etc/ca.pem"),
+        ("NODE_EXTRA_CA_CERTS", "/etc/ca.pem"),
+        ("SSL_CERT_PASSWORD", "nope"),
         ("HOME", "/home/u"),
         ("SHELL", "/bin/zsh"),
         ("XDG_RUNTIME_DIR", "/run/user/1"),
@@ -464,15 +470,20 @@ fn scrub_env_keeps_only_the_allowlist() {
             "CLAUDE_CODE_PROJECT_DIR_NAME",
             "CLAUDE_CONFIG_DIR",
             "CODEX_HOME",
+            "CURL_CA_BUNDLE",
             "LANG",
             "LC_ALL",
             "LC_CTYPE",
+            "NODE_EXTRA_CA_CERTS",
             "OPENCODE_CONFIG_DIR",
             "OPENCODE_DB",
             "PATH",
             "PI_CODING_AGENT_DIR",
             "PI_CODING_AGENT_SESSION_DIR",
             "PI_OFFLINE",
+            "REQUESTS_CA_BUNDLE",
+            "SSL_CERT_DIR",
+            "SSL_CERT_FILE",
             "XDG_CONFIG_HOME",
             "XDG_DATA_HOME",
             "XDG_STATE_HOME",
@@ -682,4 +693,40 @@ fn scrub_env_keeps_only_absolute_path_entries_and_a_plain_db_path() {
         Some("/home/u/oc.db")
     );
     assert!(!out.contains_key("PATH"), "nothing absolute is left");
+}
+
+#[test]
+fn scrub_env_keeps_ca_locations_only_as_absolute_paths() {
+    use herdr_wake::record::scrub_env;
+    let files = [
+        "SSL_CERT_FILE",
+        "REQUESTS_CA_BUNDLE",
+        "CURL_CA_BUNDLE",
+        "NODE_EXTRA_CA_CERTS",
+    ];
+    let mut env = BTreeMap::new();
+    for name in files {
+        env.insert(name.to_string(), "certs/ca.pem".to_string());
+    }
+    env.insert("SSL_CERT_DIR".to_string(), "certs:.:".to_string());
+    assert!(scrub_env(&env).is_empty(), "relative paths are dropped");
+
+    for name in files {
+        env.insert(name.to_string(), "/etc/ssl/corp-ca.pem".to_string());
+    }
+    env.insert(
+        "SSL_CERT_DIR".to_string(),
+        "/etc/ssl/certs:certs:/opt/ca".to_string(),
+    );
+    let out = scrub_env(&env);
+    for name in files {
+        assert_eq!(
+            out.get(name).map(String::as_str),
+            Some("/etc/ssl/corp-ca.pem")
+        );
+    }
+    assert_eq!(
+        out.get("SSL_CERT_DIR").map(String::as_str),
+        Some("/etc/ssl/certs:/opt/ca")
+    );
 }

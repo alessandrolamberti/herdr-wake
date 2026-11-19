@@ -540,6 +540,23 @@ const ENV_ALLOW: &[&str] = &[
     "PI_OFFLINE",
     "OPENCODE_CONFIG_DIR",
     "OPENCODE_DB",
+    // Where TLS clients find extra or replacement CA certificates. Behind an
+    // HTTPS-inspecting proxy an agent cannot reach its API without them, and
+    // a terminal recovered at boot does not get them from the shell profile.
+    "SSL_CERT_FILE",
+    "SSL_CERT_DIR",
+    "REQUESTS_CA_BUNDLE",
+    "CURL_CA_BUNDLE",
+    "NODE_EXTRA_CA_CERTS",
+];
+
+/// Names in `ENV_ALLOW` whose value must be one absolute path.
+const ENV_ABSOLUTE_FILE: &[&str] = &[
+    "OPENCODE_DB",
+    "SSL_CERT_FILE",
+    "REQUESTS_CA_BUNDLE",
+    "CURL_CA_BUNDLE",
+    "NODE_EXTRA_CA_CERTS",
 ];
 
 /// Name endings that are never stored, even under an allowed prefix.
@@ -559,14 +576,16 @@ fn env_allowed(name: &str) -> bool {
 }
 
 /// The part of `env` a record may hold: `PATH`, `LANG`, `LC_*`,
-/// `XDG_*_HOME` and the agents' own folder settings (see `ENV_ALLOW`).
-/// Names ending in `_KEY`, `_TOKEN`, `_PASSWORD` or `_SECRET` are always
-/// dropped.
+/// `XDG_*_HOME`, the agents' own folder settings and the TLS clients' CA
+/// certificate locations (see `ENV_ALLOW`). Names ending in `_KEY`,
+/// `_TOKEN`, `_PASSWORD` or `_SECRET` are always dropped.
 ///
-/// Two values are checked as well as names: `PATH` keeps only its absolute
-/// folders (a relative or empty entry would look programs up in the session
-/// folder), and `OPENCODE_DB` is kept only when it is an absolute file path
-/// (a database URL can carry a password).
+/// Some values are checked as well as names: `PATH` and `SSL_CERT_DIR` keep
+/// only their absolute folders (a relative or empty `PATH` entry would look
+/// programs up in the session folder), and the names in `ENV_ABSOLUTE_FILE`
+/// are kept only when they are an absolute path (an `OPENCODE_DB` URL can
+/// carry a password; a relative CA file would be read from the session
+/// folder).
 ///
 /// This runs when a record is written and again when it is read at wake, so
 /// a label written by something else cannot bring other variables along.
@@ -575,14 +594,14 @@ pub fn scrub_env(env: &BTreeMap<String, String>) -> BTreeMap<String, String> {
         .filter(|(k, _)| env_allowed(k))
         .filter_map(|(k, v)| {
             let v = match k.as_str() {
-                "PATH" => {
+                "PATH" | "SSL_CERT_DIR" => {
                     let dirs: Vec<&str> = v.split(':').filter(|d| d.starts_with('/')).collect();
                     if dirs.is_empty() {
                         return None;
                     }
                     dirs.join(":")
                 }
-                "OPENCODE_DB" if !v.starts_with('/') => return None,
+                name if ENV_ABSOLUTE_FILE.contains(&name) && !v.starts_with('/') => return None,
                 _ => v.clone(),
             };
             Some((k.clone(), v))
