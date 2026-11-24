@@ -383,3 +383,84 @@ fn gives_up_after_thirty_days() {
     assert_eq!(slept.get(), 30 * 24 * 3600 * 1000);
     assert_eq!(w.state(), State::Running);
 }
+
+mod claims {
+    use super::*;
+    use herdr_wake::watch::{claim, Claim};
+
+    fn t(s: &str) -> TerminalId {
+        TerminalId(s.to_string())
+    }
+
+    #[test]
+    fn a_second_watcher_for_the_same_agent_is_refused_until_the_first_ends() {
+        let dir = tempfile::tempdir().unwrap();
+        let alive = |_: &ProcRef| true;
+        let first = claim(dir.path(), &t("t7h"), AGENT, &alive);
+        assert!(matches!(first, Claim::Mine(..)), "{first:?}");
+        assert!(matches!(
+            claim(dir.path(), &t("t7h"), AGENT, &alive),
+            Claim::Taken
+        ));
+        drop(first);
+        assert!(matches!(
+            claim(dir.path(), &t("t7h"), AGENT, &alive),
+            Claim::Mine(..)
+        ));
+    }
+
+    #[test]
+    fn another_agent_or_terminal_gets_its_own_watcher() {
+        let dir = tempfile::tempdir().unwrap();
+        let alive = |_: &ProcRef| true;
+        let _first = claim(dir.path(), &t("t7h"), AGENT, &alive);
+        let next_agent = ProcRef {
+            pid: 501,
+            start: 51,
+        };
+        assert!(matches!(
+            claim(dir.path(), &t("t7h"), next_agent, &alive),
+            Claim::Mine(..)
+        ));
+        assert!(matches!(
+            claim(dir.path(), &t("t8"), AGENT, &alive),
+            Claim::Mine(..)
+        ));
+    }
+
+    #[test]
+    fn remove_deletes_the_lock_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let mine = claim(dir.path(), &t("vps/t3"), AGENT, &|_| true);
+        assert!(dir.path().join("vps_t3-500-50.lock").exists());
+        mine.remove();
+        assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 0);
+    }
+
+    #[test]
+    fn lock_files_of_gone_agents_are_cleared_and_live_ones_kept() {
+        let dir = tempfile::tempdir().unwrap();
+        for name in ["t1-900-90.lock", "t2-901-91.lock", "notes.txt"] {
+            std::fs::write(dir.path().join(name), "").unwrap();
+        }
+        let alive = |p: &ProcRef| p.pid != 900;
+        let _mine = claim(dir.path(), &t("t3"), AGENT, &alive);
+        let mut left: Vec<String> = std::fs::read_dir(dir.path())
+            .unwrap()
+            .map(|e| e.unwrap().file_name().into_string().unwrap())
+            .collect();
+        left.sort();
+        assert_eq!(left, ["notes.txt", "t2-901-91.lock", "t3-500-50.lock"]);
+    }
+
+    #[test]
+    fn an_unusable_folder_still_lets_the_watcher_run() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("not-a-folder");
+        std::fs::write(&file, "").unwrap();
+        assert!(matches!(
+            claim(&file, &t("t1"), AGENT, &|_| true),
+            Claim::Unavailable
+        ));
+    }
+}

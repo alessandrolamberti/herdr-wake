@@ -58,6 +58,12 @@ pub fn claims_dir(env: &BTreeMap<String, String>, home: &Path) -> PathBuf {
     state_dir(env, home).join("claims")
 }
 
+/// `<state dir>/watchers`: one lock file per watched agent process, held by
+/// its watcher (see `watch::claim`).
+pub fn watchers_dir(env: &BTreeMap<String, String>, home: &Path) -> PathBuf {
+    state_dir(env, home).join("watchers")
+}
+
 /// `<state dir>/records`: one private copy per terminal of the record
 /// herdr-wake itself stored there (see `record::write_copy`).
 pub fn records_dir(env: &BTreeMap<String, String>, home: &Path) -> PathBuf {

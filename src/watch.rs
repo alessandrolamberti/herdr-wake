@@ -1,15 +1,18 @@
 //! `herdr-wake watch`: a detached watcher that marks a session ended when
 //! the user quit the agent (Task 10, the Forget flow in `docs/DESIGN.md`).
 //!
-//! The hook starts one per agent the user launched by hand. When the agent
-//! exits and its shell is still the same live process a moment later, the
-//! user quit, so the record is marked ended. Every doubt leaves the record
+//! The hook starts one per agent the user launched by hand, at each of its
+//! session starts; a lock file per agent process keeps only the first
+//! (`claim`). When the agent exits and its shell is still the same live
+//! process a moment later, the user quit, so the record is marked ended. Every doubt leaves the record
 //! in place, which leans toward resuming: a stop signal (the OS kills
 //! processes at shutdown, and an interactive zsh ignores SIGTERM, so "the
 //! shell outlived the agent" can be faked), a shutdown in progress, a gone
 //! shell, a new boot, an unreachable core, or a stored record that no longer
 //! names the watched agent and shell.
 
+use std::fs::File;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
@@ -110,6 +113,90 @@ pub fn run(
     }
 }
 
+/// Whether this watcher may watch its agent.
+#[derive(Debug)]
+pub enum Claim {
+    /// This watcher holds the agent's lock file until it exits; `remove`
+    /// deletes the file once watching is over.
+    Mine(File, PathBuf),
+    /// Another watcher already holds it.
+    Taken,
+    /// The lock file could not be used: watch anyway, as before locks.
+    Unavailable,
+}
+
+impl Claim {
+    /// Deletes the lock file while still holding it. A watcher started for
+    /// the same agent after this finds the agent gone and leaves at once.
+    pub fn remove(self) {
+        if let Claim::Mine(file, path) = self {
+            let _ = std::fs::remove_file(&path);
+            drop(file);
+        }
+    }
+}
+
+/// The lock file name for `agent` in terminal `t`: `<t>-<pid>-<start>.lock`,
+/// with anything but ASCII letters and digits in the address made `_`.
+fn lock_name(t: &TerminalId, agent: ProcRef) -> String {
+    let t: String = t
+        .as_str()
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() { c } else { '_' })
+        .collect();
+    format!("{t}-{}-{}.lock", agent.pid, agent.start)
+}
+
+/// Takes `<dir>/<t>-<pid>-<start>.lock` for `agent` without waiting. The
+/// hook starts a watcher at every session start (a new session, /clear,
+/// /compact, a resume), all for the same agent process, so only the first
+/// may stay. The lock goes with the process however it ends, `_exit` from
+/// the stop handler included. Lock files whose agent `alive` says is gone
+/// are deleted first: their watcher was stopped before it could.
+pub fn claim(
+    dir: &Path,
+    t: &TerminalId,
+    agent: ProcRef,
+    alive: &dyn Fn(&ProcRef) -> bool,
+) -> Claim {
+    use rustix::fs::{flock, FlockOperation};
+
+    remove_dead(dir, alive);
+    let path = dir.join(lock_name(t, agent));
+    let Ok(file) = crate::private::open_rw(&path) else {
+        return Claim::Unavailable;
+    };
+    match flock(&file, FlockOperation::NonBlockingLockExclusive) {
+        Ok(()) => Claim::Mine(file, path),
+        Err(e) if e == rustix::io::Errno::WOULDBLOCK => Claim::Taken,
+        Err(_) => Claim::Unavailable,
+    }
+}
+
+/// Deletes `*.lock` files in `dir` whose agent (`…-<pid>-<start>.lock`) is
+/// no longer alive.
+fn remove_dead(dir: &Path, alive: &dyn Fn(&ProcRef) -> bool) {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    for e in entries.flatten() {
+        let name = e.file_name();
+        let Some(stem) = name.to_str().and_then(|n| n.strip_suffix(".lock")) else {
+            continue;
+        };
+        let mut parts = stem.rsplitn(3, '-');
+        let (Some(start), Some(pid), Some(_)) = (parts.next(), parts.next(), parts.next()) else {
+            continue;
+        };
+        let (Ok(start), Ok(pid)) = (start.parse::<u64>(), pid.parse::<u32>()) else {
+            continue;
+        };
+        if !alive(&ProcRef { pid, start }) {
+            let _ = std::fs::remove_file(e.path());
+        }
+    }
+}
+
 static STOP: AtomicBool = AtomicBool::new(false);
 
 extern "C" fn on_signal(_sig: libc::c_int) {
@@ -137,7 +224,8 @@ fn install_stop_handler() {
 /// Entry point for `herdr-wake watch <terminal> <agent pid> <agent start>
 /// <shell pid> <shell start>`. Installs the SIGTERM, SIGHUP and SIGINT
 /// handler (exit at once without writing), runs `run` against the real
-/// platform and core, logs one line and returns 0. Prints nothing.
+/// platform and core, logs one line and returns 0. Prints nothing. Returns
+/// 0 at once, logging nothing, when another watcher has this agent.
 pub fn main(t: &TerminalId, agent: ProcRef, shell: ProcRef) -> i32 {
     install_stop_handler();
     std::panic::set_hook(Box::new(|_| {}));
@@ -145,6 +233,13 @@ pub fn main(t: &TerminalId, agent: ProcRef, shell: ProcRef) -> i32 {
     let home = home_of(&env);
     let platform = platform::current();
     let socket = socket::socket_path(&env, &home);
+
+    let claim = claim(&crate::paths::watchers_dir(&env, &home), t, agent, &|p| {
+        platform.alive(p)
+    });
+    if let Claim::Taken = claim {
+        return 0;
+    }
 
     let connect = || -> Result<Box<dyn Core>, CoreError> {
         Ok(Box::new(socket::connect(&socket, CORE_BUDGET)?))
@@ -163,6 +258,7 @@ pub fn main(t: &TerminalId, agent: ProcRef, shell: ProcRef) -> i32 {
             &stop,
         )
     }));
+    claim.remove();
     if let Ok(WatchOutcome::EndedRecord) = outcome {
         // The session was quit: its local copy goes too, so the record
         // cannot be made to resume by flipping the label back to running.
