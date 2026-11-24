@@ -439,6 +439,7 @@ fn scrub_env_keeps_only_the_allowlist() {
         ("LC_CTYPE", "UTF-8"),
         ("CLAUDE_CONFIG_DIR", "/c"),
         ("CLAUDE_CODE_PROJECT_DIR_NAME", "p"),
+        ("CLAUDE_CODE_EXPERIMENTAL_CODE_MODE", "1"),
         ("CODEX_HOME", "/x"),
         ("PI_CODING_AGENT_DIR", "/pi"),
         ("PI_CODING_AGENT_SESSION_DIR", "/pis"),
@@ -467,6 +468,7 @@ fn scrub_env_keeps_only_the_allowlist() {
     assert_eq!(
         kept,
         vec![
+            "CLAUDE_CODE_EXPERIMENTAL_CODE_MODE",
             "CLAUDE_CODE_PROJECT_DIR_NAME",
             "CLAUDE_CONFIG_DIR",
             "CODEX_HOME",
@@ -693,6 +695,22 @@ fn scrub_env_keeps_only_absolute_path_entries_and_a_plain_db_path() {
         Some("/home/u/oc.db")
     );
     assert!(!out.contains_key("PATH"), "nothing absolute is left");
+}
+
+#[test]
+fn scrub_env_keeps_claude_code_mode_only_as_0_or_1() {
+    use herdr_wake::record::scrub_env;
+    let name = "CLAUDE_CODE_EXPERIMENTAL_CODE_MODE";
+    for (value, kept) in [
+        ("1", true),
+        ("0", true),
+        ("true", false),
+        ("1; x", false),
+        ("", false),
+    ] {
+        let env = BTreeMap::from([(name.to_string(), value.to_string())]);
+        assert_eq!(scrub_env(&env).contains_key(name), kept, "{value:?}");
+    }
 }
 
 #[test]

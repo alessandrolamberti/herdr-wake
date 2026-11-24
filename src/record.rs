@@ -534,6 +534,9 @@ const ENV_ALLOW: &[&str] = &[
     "LANG",
     "CLAUDE_CONFIG_DIR",
     "CLAUDE_CODE_PROJECT_DIR_NAME",
+    // Claude Code's code mode: a conversation started in it can be resumed
+    // only with it on. Kept only as "0" or "1".
+    "CLAUDE_CODE_EXPERIMENTAL_CODE_MODE",
     "CODEX_HOME",
     "PI_CODING_AGENT_DIR",
     "PI_CODING_AGENT_SESSION_DIR",
@@ -585,7 +588,7 @@ fn env_allowed(name: &str) -> bool {
 /// programs up in the session folder), and the names in `ENV_ABSOLUTE_FILE`
 /// are kept only when they are an absolute path (an `OPENCODE_DB` URL can
 /// carry a password; a relative CA file would be read from the session
-/// folder).
+/// folder), and `CLAUDE_CODE_EXPERIMENTAL_CODE_MODE` only as `0` or `1`.
 ///
 /// This runs when a record is written and again when it is read at wake, so
 /// a label written by something else cannot bring other variables along.
@@ -602,6 +605,7 @@ pub fn scrub_env(env: &BTreeMap<String, String>) -> BTreeMap<String, String> {
                     dirs.join(":")
                 }
                 name if ENV_ABSOLUTE_FILE.contains(&name) && !v.starts_with('/') => return None,
+                "CLAUDE_CODE_EXPERIMENTAL_CODE_MODE" if v != "0" && v != "1" => return None,
                 _ => v.clone(),
             };
             Some((k.clone(), v))
